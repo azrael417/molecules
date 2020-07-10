@@ -12,7 +12,7 @@ from molecules.ml.hyperparams import OptimizerHyperparams
 class TestVAE:
 
     class DummyContactMap(Dataset):
-            def __init__(self, input_shape, size=200):
+            def __init__(self, input_shape, size=10):
                 self.maps = np.random.normal(size=(size, *input_shape))
                 #self.maps = np.array([self.maps for _ in range(size)])
 
@@ -104,7 +104,7 @@ class TestVAE:
                    'affine_dropouts': [0],
                    'latent_dim': 3}
 
-        self.hparams = SymmetricVAEHyperparams(**diff_filters_hparams)
+        self.hparams = SymmetricVAEHyperparams(**fs_peptide_hparams)
         self.optimizer_hparams = OptimizerHyperparams(name='RMSprop', hparams={'lr':0.00001})
 
         # For testing saving and loading weights
@@ -170,7 +170,7 @@ class TestVAE:
 
         vae.train(train_loader, test_loader, self.epochs)
 
-    def test_rectangular_data_symmetric_vae(self):
+    def _test_rectangular_data_symmetric_vae(self):
 
         rectangular_shape = (1, 22, 22)
         rectangular_shape = (1, 24, 524)
@@ -300,6 +300,50 @@ class TestVAE:
             # Flatten contact matrix
             x = x.view(-1, *input_shape)
             out = res(x)
+
+    def _test_symmetric_big_input(self):
+        big_shape = (1, 3768, 3768) # GB: 0.113582592
+
+        train_loader = DataLoader(TestVAE.DummyContactMap(big_shape),
+                                  batch_size=2, shuffle=True)
+        test_loader = DataLoader(TestVAE.DummyContactMap(big_shape),
+                                 batch_size=5, shuffle=True)
+
+        hparams = {'filters': [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64],
+                   'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+                   'strides': [1, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+                   'affine_widths': [128],
+                   'affine_dropouts': [0],
+                   'latent_dim': 20}
+
+        hparams = SymmetricVAEHyperparams(**hparams)
+
+        vae = VAE(big_shape, hparams, self.optimizer_hparams)
+
+        print(vae)
+        summary(vae.model, big_shape)
+
+        vae.train(train_loader, test_loader, self.epochs)
+
+
+    def test_resnet_big_input(self):
+        big_shape = (3768, 3768) # GB: 0.113582592
+
+        train_loader = DataLoader(TestVAE.DummyContactMap(big_shape),
+                                  batch_size=2, shuffle=True)
+        test_loader = DataLoader(TestVAE.DummyContactMap(big_shape),
+                                 batch_size=5, shuffle=True)
+
+
+        from molecules.ml.unsupervised.vae.resnet import ResnetVAEHyperparams
+        hparams = ResnetVAEHyperparams(big_shape, latent_dim=24)
+
+        vae = VAE(big_shape, hparams, self.optimizer_hparams)
+
+        print(vae)
+        summary(vae.model, big_shape)
+
+        vae.train(train_loader, test_loader, self.epochs)
 
     @classmethod
     def teardown_class(self):
