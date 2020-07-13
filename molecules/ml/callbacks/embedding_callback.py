@@ -95,7 +95,7 @@ class EmbeddingCallback(Callback):
 
         # TODO: compute native contacts
 
-        rmsd_dset = h5_file['rmsd']
+        rmsd_dset = h5_file['RMSD']
         rmsd = np.array(rmsd_dset[0: len(rmsd_dset): self.sample_interval][:, 2])
         return rmsd #, native_contacts
 

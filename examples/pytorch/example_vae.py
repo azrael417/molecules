@@ -48,16 +48,25 @@ def main(input_path, out_path, model_id, encoder_gpu,
 
     if model_type == 'symmetric':
         # Optimal Fs-peptide params
-        fs_peptide_hparams ={'filters': [100, 100, 100, 100],
-                             'kernels': [5, 5, 5, 5],
-                             'strides': [1, 2, 1, 1],
-                             'affine_widths': [64],
-                             'affine_dropouts': [0],
-                             'latent_dim': latent_dim}
+        #fs_peptide_hparams ={'filters': [100, 100, 100, 100],
+        #                     'kernels': [5, 5, 5, 5],
+        #                     'strides': [1, 2, 1, 1],
+        #                     'affine_widths': [64],
+        #                     'affine_dropouts': [0],
+         #                    'latent_dim': latent_dim}
+        hparams = {'filters': [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64],
+           'kernels': [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+           'strides': [1, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+           'affine_widths': [128],
+           'affine_dropouts': [0],
+           'latent_dim': 20}
 
-        input_shape = (1, 22, 22)
+
+        input_shape = (1, 3768, 3768)
         squeeze = False
-        hparams = SymmetricVAEHyperparams(**fs_peptide_hparams)
+        hparams = SymmetricVAEHyperparams(**hparams)
+
+        #hparams = SymmetricVAEHyperparams(**fs_peptide_hparams)
 
     elif model_type == 'resnet':
         input_shape = (22, 22)
@@ -87,14 +96,14 @@ def main(input_path, out_path, model_id, encoder_gpu,
     writer = SummaryWriter()
     loss_callback = LossCallback(join(model_path, 'loss.json'), writer)
     checkpoint_callback = CheckpointCallback(out_dir=join(model_path, 'checkpoint'))
-    embedding_callback = EmbeddingCallback(input_path,
-                                           out_dir=join(model_path, 'embedddings'),
-                                           squeeze=squeeze,
-                                           writer=writer)
+    #embedding_callback = EmbeddingCallback(input_path,
+    #                                       out_dir=join(model_path, 'embedddings'),
+    #                                       squeeze=squeeze,
+    #                                       writer=writer)
 
     # Train model with callbacks
     vae.train(train_loader, valid_loader, epochs,
-              callbacks=[loss_callback, checkpoint_callback, embedding_callback])
+              callbacks=[loss_callback, checkpoint_callback])#, embedding_callback])
 
     # Save loss history to disk.
     loss_callback.save(join(model_path, 'loss.json'))
