@@ -11,7 +11,7 @@ class PointCloudDataset(Dataset):
     """
     def __init__(self, path, dataset_name, rmsd_name,
                  num_points, num_features, split_ptc=0.8,
-                 split='train', normalize = True):
+                 split = 'train', normalize = 'box'):
         """
         Parameters
         ----------
@@ -69,12 +69,12 @@ class PointCloudDataset(Dataset):
 
         # normalize input
         self.normalize = normalize
-        if self.normalize:
-            self.bias = self.dset[...].min(axis = (0,2))
-            self.scale = 1. / (self.dset[...].max(axis = (0,2)) - self.bias)
+        if self.normalize == 'box':
+            self.bias = self.dset[:, 0:3, :].min()
+            self.scale = 1. / (self.dset[:, 0:3, :].max() - self.bias)
             # broadcast shapes
-            self.bias = np.tile(np.expand_dims(self.bias, axis = -1), (1, self.num_points))
-            self.scale = np.tile(np.expand_dims(self.scale, axis = -1), (1, self.num_points))
+            self.bias = np.tile(self.bias, (3 + self.num_features, self.num_points)).astype(np.float32)
+            self.scale = np.tile(self.scale, (3 + self.num_features, self.num_points)).astype(np.float32)
         else:
             self.bias = np.zeros((3 + self.num_features, self.num_points), dtype = np.float32)
             self.scale = np.ones((3 + self.num_features, self.num_points), dtype = np.float32)
