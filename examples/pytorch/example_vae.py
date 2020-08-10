@@ -8,7 +8,7 @@ from molecules.ml.hyperparams import OptimizerHyperparams
 from molecules.ml.callbacks import LossCallback, CheckpointCallback, EmbeddingCallback
 from molecules.ml.unsupervised.vae import VAE, SymmetricVAEHyperparams, ResnetVAEHyperparams
 import torch.distributed as dist
-import torch.nn.parallel.DistributedDataParallel as DDP
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 @click.command()
 @click.option('-i', '--input', 'input_path', required=True,
