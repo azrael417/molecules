@@ -2,12 +2,13 @@ import os
 import click
 from os.path import join
 from torchsummary import summary
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, subset
 from molecules.ml.datasets import ContactMapDataset
 from molecules.ml.hyperparams import OptimizerHyperparams
 from molecules.ml.callbacks import LossCallback, CheckpointCallback, EmbeddingCallback
 from molecules.ml.unsupervised.vae import VAE, SymmetricVAEHyperparams, ResnetVAEHyperparams
-
+import torch.distributed as dist
+import torch.nn.parallel.DistributedDataParallel as DDP
 
 @click.command()
 @click.option('-i', '--input', 'input_path', required=True,
@@ -29,6 +30,9 @@ from molecules.ml.unsupervised.vae import VAE, SymmetricVAEHyperparams, ResnetVA
 
 @click.option('-s', '--sparse', is_flag=True,
               help='Specifiy whether input matrices are sparse format')
+
+@click.option('-a', '--amp', is_flag=True,
+              help='Specifiy to enable AMP')
 
 @click.option('-E', '--encoder_gpu', default=None, type=int,
               help='Encoder GPU id')
@@ -52,9 +56,19 @@ from molecules.ml.unsupervised.vae import VAE, SymmetricVAEHyperparams, ResnetVA
               help='Project name for wandb logging')
 
 def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
-         decoder_gpu, epochs, batch_size, model_type, latent_dim,
+         amp, decoder_gpu, epochs, batch_size, model_type, latent_dim,
          wandb_project_name):
     """Example for training Fs-peptide with either Symmetric or Resnet VAE."""
+
+    # init distributed
+    dist.init_process_group(backend='nccl', init_method='env://')
+    comm_size = torch.distributed.get_world_size()
+    comm_rank = torch.distributed.get_rank()
+    comm_ngpu = torch.cuda.device_count()
+    if encoder_gpu == decoder_gpu:
+        comm_local_rank = comm_rank % comm_ngpu
+    else:
+        comm_local_rank = comm_rank % (comm_ngpu // 2)
 
     assert model_type in ['symmetric', 'resnet']
 
@@ -78,16 +92,22 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
         resnet_hparams = {'max_len': dim1,
                           'nchars': dim2,
                           'latent_dim': latent_dim,
-                          'dec_filters': dim1}
+                          'dec_filters': dim1,
+                          'output_activation': 'None'}
 
         input_shape = (dim1, dim1)
         hparams = ResnetVAEHyperparams(**resnet_hparams)
 
     optimizer_hparams = OptimizerHyperparams(name='RMSprop', hparams={'lr':0.00001})
 
+    # place encoder and decoder
     vae = VAE(input_shape, hparams, optimizer_hparams,
-              gpu=(encoder_gpu, decoder_gpu))
+              gpu = (encoder_gpu, decoder_gpu), enable_amp = amp)
 
+    # do we want distributed training?
+    if comm_size > 1:
+        vae.model = DDP(vae.model, device_ids = None, output_device = None)
+    
     # Diplay model
     print(vae)
     # Only print summary when encoder_gpu is None or 0
@@ -101,6 +121,9 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
                                       input_shape,
                                       split='train',
                                       sparse=sparse)
+    if comm_size > 1:
+        chunksize = len(train_dataset) // comm_size
+        train_dataset = subset(train_dataset, [comm_rank * chunksize: (comm_rank + 1) * chunksize])
     
     train_loader = DataLoader(train_dataset,
                               batch_size = batch_size,
@@ -125,7 +148,7 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
 
     # do we want wandb
     wandb_config = None
-    if wandb_project_name is not None:
+    if (wandb_project_name is not None) and (comm_rank == 0):
         import wandb
         wandb.init(project = wandb_project_name,
                    name = model_id,

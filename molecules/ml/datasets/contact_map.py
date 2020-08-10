@@ -75,16 +75,18 @@ class ContactMapDataset(Dataset):
 
         if self.sparse:
             indices = torch.from_numpy(np.vstack((self.row_dset[idx],
-                                                  self.col_dset[idx]))) \
-                                      .to(self.device).to(torch.long)
-            values = torch.ones(indices.shape[1], dtype=torch.float32,
-                                device=self.device)
+                                                  self.col_dset[idx]))).to(torch.long)
+            values = torch.ones(indices.shape[1], dtype = torch.float32)
             # Set shape to the last 2 elements of self.shape.
             # Handles (1, W, H) and (W, H)
             data = torch.sparse.FloatTensor(indices, values, self.shape[-2:]).to_dense()
         else:
             data = torch.Tensor(self.dset[idx, ...])
-        rmsd = self.rmsd[idx, 2]
+
+        if self.rmsd[idx].ndim <= 1:
+            rmsd = self.rmsd[idx]
+        else:
+            rmsd = self.rmsd[idx, -1]
 
         return data.view(self.shape), torch.tensor(rmsd, requires_grad = False)
 

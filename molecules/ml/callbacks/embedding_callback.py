@@ -73,7 +73,10 @@ class EmbeddingCallback(Callback):
     def _init_plot(self, path, rmsd_name):
         # load all rmsd data
         f = open_h5(path)
-        rmsd = f[rmsd_name][..., 2]
+        if f[rmsd_name][...].ndim == 1:
+            rmsd = f[rmsd_name][...]
+        else:
+            rmsd = f[rmsd_name][..., 2]
         vmin, vmax = self.minmax(rmsd)
 
         # create colormaps

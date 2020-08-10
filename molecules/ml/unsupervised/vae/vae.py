@@ -7,6 +7,8 @@ from collections import namedtuple
 from .resnet import ResnetVAEHyperparams
 from .symmetric import SymmetricVAEHyperparams
 from molecules.ml.hyperparams import OptimizerHyperparams, get_optimizer
+import torch.cuda.amp as amp
+import torch.distributed as dist
 
 __all__ = ['VAE']
 
@@ -87,6 +89,26 @@ def vae_loss(recon_x, x, mu, logvar):
     return BCE + KLD
 
 
+def vae_logit_loss(log_recon_x, x, mu, logvar):
+    """
+    Effects
+    -------
+    Reconstruction + KL divergence losses summed over all elements and batch,
+    logits based.
+
+    See Appendix B from VAE paper:
+    Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
+    https://arxiv.org/abs/1312.6114
+    """
+    
+    BCE = F.binary_cross_entropy_with_logits(log_recon_x, x, reduction='sum')
+
+    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    
+    return BCE + KLD
+
+
 # TODO: set weight initialization hparams
 class VAE:
     """
@@ -128,6 +150,7 @@ class VAE:
                  optimizer_hparams=OptimizerHyperparams(),
                  loss=None,
                  gpu=None,
+                 enable_amp=False,
                  verbose=True):
         """
         Parameters
@@ -163,6 +186,9 @@ class VAE:
 
         self.verbose = verbose
 
+        # amp
+        self.enable_amp = enable_amp
+
         # Tuple of encoder, decoder device
         self.device = Device(*self._configure_device(gpu))
 
@@ -171,8 +197,9 @@ class VAE:
         # TODO: consider making optimizer_hparams a member variable
         # RMSprop with lr=0.001, alpha=0.9, epsilon=1e-08, decay=0.0
         self.optimizer = get_optimizer(self.model.parameters(), optimizer_hparams)
+        self.gscaler = amp.GradScaler(self.enable_amp)
 
-        self.loss_fnc = vae_loss if loss is None else loss
+        self.loss_fnc = vae_logit_loss if loss is None else loss
 
     def _configure_device(self, gpu):
         """
@@ -296,17 +323,26 @@ class VAE:
             for callback in callbacks:
                 callback.on_batch_begin(batch_idx, epoch, logs)
 
-            # TODO: Consider passing device argument into dataset class instead
-            # data = data.to(self.device.encoder)
+            # forward
+            with amp.autocast(self.enable_amp):
+                log_recon_batch, codes, mu, logvar = self.model(data)
+                loss = self.loss_fnc(log_recon_batch, data, mu, logvar)
+
+            # backward
             self.optimizer.zero_grad()
-            recon_batch, codes, mu, logvar = self.model(data)
-            loss = self.loss_fnc(recon_batch, data, mu, logvar)
-            loss.backward()
-            train_loss += loss.item() / len(data)
-            self.optimizer.step()
+            self.gscaler.scale(loss).backward()
+            self.gscaler.step(self.optimizer)
+            self.gscaler.update()
+
+            # update loss
+            train_loss_tmp = loss.item() / len(data)
+            if dist.is_initialized():
+                dist.all_reduce(train_loss_tmp)
+                train_loss_tmp /= float(dist.get_world_size())
+            train_loss += train_loss_tmp
 
             if callbacks:
-                logs['train_loss'] = loss.item() / len(data)
+                logs['train_loss'] = train_loss_tmp
                 logs['global_step'] = (epoch - 1) * len(train_loader) + batch_idx
 
             if self.verbose:
@@ -319,6 +355,9 @@ class VAE:
                 callback.on_batch_end(batch_idx, epoch, logs)
 
         train_loss_ave = train_loss / float(batch_idx + 1)
+        if dist.is_initialized():
+            dist.all_reduce(train_loss_ave)
+            train_loss_ave /= float(dist.get_world_size())
 
         if callbacks:
             logs['train_loss_average'] = train_loss_ave
@@ -355,7 +394,8 @@ class VAE:
                 data = data.to(self.device[0])
                 
                 # data = data.to(self.device)
-                recon_batch, codes, mu, logvar = self.model(data)
+                log_recon_batch, codes, mu, logvar = self.model(data)
+                recon_batch = F.sigmoid(log_recon_batch)
                 valid_loss += self.loss_fnc(recon_batch, data, mu, logvar).item() / len(data)
                 
                 if callbacks:
