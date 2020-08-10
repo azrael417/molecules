@@ -339,11 +339,11 @@ class VAE:
             self.gscaler.update()
 
             # update loss
-            train_loss_tmp = loss.item() / len(data)
+            train_loss_tmp = loss.detach() / len(data)
             if dist.is_initialized():
                 dist.all_reduce(train_loss_tmp)
                 train_loss_tmp /= float(dist.get_world_size())
-            train_loss += train_loss_tmp
+            train_loss += train_loss_tmp.item()
 
             if callbacks:
                 logs['train_loss'] = train_loss_tmp
@@ -359,9 +359,6 @@ class VAE:
                 callback.on_batch_end(batch_idx, epoch, logs)
 
         train_loss_ave = train_loss / float(batch_idx + 1)
-        if dist.is_initialized():
-            dist.all_reduce(train_loss_ave)
-            train_loss_ave /= float(dist.get_world_size())
 
         if callbacks:
             logs['train_loss_average'] = train_loss_ave

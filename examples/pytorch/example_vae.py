@@ -2,6 +2,7 @@ import os
 import click
 from os.path import join
 from torchsummary import summary
+import torch
 from torch.utils.data import DataLoader, Subset
 from molecules.ml.datasets import ContactMapDataset
 from molecules.ml.hyperparams import OptimizerHyperparams
@@ -11,6 +12,9 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 @click.command()
+@click.option('-lr', '--local_rank', default = 0, type=int,
+              help='Local rank for DDP')
+
 @click.option('-i', '--input', 'input_path', required=True,
               type=click.Path(exists=True),
               help='Path to file containing preprocessed contact matrix data')
@@ -55,20 +59,17 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 @click.option('-wp', '--wandb_project_name', default=None, type=str,
               help='Project name for wandb logging')
 
-def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
-         amp, decoder_gpu, epochs, batch_size, model_type, latent_dim,
+def main(local_rank, input_path, out_path, model_id, dim1, dim2, encoder_gpu,
+         sparse, amp, decoder_gpu, epochs, batch_size, model_type, latent_dim,
          wandb_project_name):
     """Example for training Fs-peptide with either Symmetric or Resnet VAE."""
 
     # init distributed
     dist.init_process_group(backend='nccl', init_method='env://')
-    comm_size = torch.distributed.get_world_size()
-    comm_rank = torch.distributed.get_rank()
+    comm_size = dist.get_world_size()
+    comm_rank = dist.get_rank()
     comm_ngpu = torch.cuda.device_count()
-    if encoder_gpu == decoder_gpu:
-        comm_local_rank = comm_rank % comm_ngpu
-    else:
-        comm_local_rank = comm_rank % (comm_ngpu // 2)
+    comm_local_rank = local_rank
 
     assert model_type in ['symmetric', 'resnet']
 
