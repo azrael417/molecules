@@ -7,7 +7,8 @@ export CUDA_VISIBLE_DEVICES=2,3
 wandb login 6c8b9db0b520487f05d32ebc76fcea156bd85d58
 
 # run stuff
-python example_vae.py -i /data/spike/rep1_closed.h5 \
+python -m torch.distributed.launch --nproc_per_node=1 example_vae.py \
+       -i /data/spike/rep1_closed.h5 \
        -s -a \
        -t resnet \
        -o /data/runs/ -m spike-cmaps-1 \

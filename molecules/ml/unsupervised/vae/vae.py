@@ -307,6 +307,10 @@ class VAE:
             Filled with data for callbacks
         """
 
+        comm_rank = 0
+        if dist.is_initialized():
+            comm_rank == dist.get_rank()
+        
         self.model.train()
         train_loss = 0.
         for batch_idx, token in enumerate(train_loader):
@@ -345,7 +349,7 @@ class VAE:
                 logs['train_loss'] = train_loss_tmp
                 logs['global_step'] = (epoch - 1) * len(train_loader) + batch_idx
 
-            if self.verbose:
+            if self.verbose and (comm_rank == 0):
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tTime: {:.3f}'.format(
                       epoch, (batch_idx + 1) * len(data), len(train_loader.dataset),
                       100. * (batch_idx + 1) / len(train_loader),
@@ -362,7 +366,7 @@ class VAE:
         if callbacks:
             logs['train_loss_average'] = train_loss_ave
 
-        if self.verbose:
+        if self.verbose and (comm_rank == 0):
             print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss_ave))
 
     def _validate(self, valid_loader, callbacks, logs):
@@ -381,40 +385,53 @@ class VAE:
         logs : dict
             Filled with data for callbacks
         """
+
+        comm_rank = 0
+        if dist.is_initialized():
+            comm_rank == dist.get_rank()
+        
         self.model.eval()
-        valid_loss = 0
-        if callbacks:
-            logs["input_samples"] = []
-            logs["reconstructed_samples"] = []
-            logs["embeddings"] = []
-            logs["rmsd"] = []
-        with torch.no_grad():
-            for batch_idx, token in enumerate(valid_loader):
-                data, rmsd = token
-                data = data.to(self.device[0])
+        # only validate if rank == 0
+        if (comm_rank == 0):
+            # set up callbacks
+            if callbacks:
+                logs["input_samples"] = []
+                logs["reconstructed_samples"] = []
+                logs["embeddings"] = []
+                logs["rmsd"] = []
+
+            valid_loss = 0.
+            with torch.no_grad():
+                for batch_idx, token in enumerate(valid_loader):
+                    data, rmsd = token
+                    data = data.to(self.device[0])
                 
-                # data = data.to(self.device)
-                log_recon_batch, codes, mu, logvar = self.model(data)
-                recon_batch = F.sigmoid(log_recon_batch)
-                valid_loss += self.loss_fnc(recon_batch, data, mu, logvar).item() / len(data)
-                
-                if callbacks:
-                    logs["input_samples"].append(data.detach().cpu().numpy())
-                    logs["embeddings"].append(mu.detach().cpu().numpy())
-                    logs["reconstructed_samples"].append(recon_batch.detach().cpu().numpy())
-                    logs["rmsd"].append(rmsd.detach().numpy())
+                    # data = data.to(self.device)
+                    log_recon_batch, codes, mu, logvar = self.model(data)
+                    recon_batch = F.sigmoid(log_recon_batch)
+                    valid_loss += self.loss_fnc(recon_batch, data, mu, logvar).item() / len(data)
+                    
+                    if callbacks:
+                        logs["input_samples"].append(data.detach().cpu().numpy())
+                        logs["embeddings"].append(mu.detach().cpu().numpy())
+                        logs["reconstructed_samples"].append(recon_batch.detach().cpu().numpy())
+                        logs["rmsd"].append(rmsd.detach().numpy())
 
             valid_loss /= float(batch_idx + 1)
 
-        if callbacks:
-            logs['valid_loss'] = valid_loss
-            logs["input_samples"] = np.concatenate(logs["input_samples"], axis = 0)
-            logs["embeddings"] = np.concatenate(logs["embeddings"], axis = 0)
-            logs["reconstructed_samples"] = np.concatenate(logs["reconstructed_samples"], axis = 0)
-            logs["rmsd"] = np.concatenate(logs["rmsd"], axis = 0)
+            if callbacks:
+                logs['valid_loss'] = valid_loss
+                logs["input_samples"] = np.concatenate(logs["input_samples"], axis = 0)
+                logs["embeddings"] = np.concatenate(logs["embeddings"], axis = 0)
+                logs["reconstructed_samples"] = np.concatenate(logs["reconstructed_samples"], axis = 0)
+                logs["rmsd"] = np.concatenate(logs["rmsd"], axis = 0)
 
-        if self.verbose:
-            print('====> Validation loss: {:.4f}'.format(valid_loss))
+            if self.verbose:
+                print('====> Validation loss: {:.4f}'.format(valid_loss))
+
+        # everybody should wait for rank 0
+        if dist.is_initialized():
+            dist.barrier()
 
     def _load_checkpoint(self, path):
         """

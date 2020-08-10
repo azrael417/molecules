@@ -2,7 +2,7 @@ import os
 import click
 from os.path import join
 from torchsummary import summary
-from torch.utils.data import DataLoader, subset
+from torch.utils.data import DataLoader, Subset
 from molecules.ml.datasets import ContactMapDataset
 from molecules.ml.hyperparams import OptimizerHyperparams
 from molecules.ml.callbacks import LossCallback, CheckpointCallback, EmbeddingCallback
@@ -114,7 +114,7 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
     summary(vae.model, input_shape)
 
     # Load training and validation data
-    # training
+    # training: chunk the dataset
     train_dataset = ContactMapDataset(input_path,
                                       "contact_maps",
                                       "rmsd",
@@ -123,14 +123,14 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
                                       sparse=sparse)
     if comm_size > 1:
         chunksize = len(train_dataset) // comm_size
-        train_dataset = subset(train_dataset, [comm_rank * chunksize: (comm_rank + 1) * chunksize])
+        train_dataset = subset(train_dataset, range(comm_rank * chunksize, (comm_rank + 1) * chunksize))
     
     train_loader = DataLoader(train_dataset,
                               batch_size = batch_size,
                               shuffle = True,
                               pin_memory = True)
 
-    # validation
+    # validation: do not chunk the dataset
     valid_dataset = ContactMapDataset(input_path,
                                       "contact_maps",
                                       "rmsd",
@@ -173,29 +173,38 @@ def main(input_path, out_path, model_id, dim1, dim2, encoder_gpu, sparse,
     from torch.utils.tensorboard import SummaryWriter
     writer = SummaryWriter()
     loss_callback = LossCallback(join(model_path, 'loss.json'), writer, wandb_config)
-    checkpoint_callback = CheckpointCallback(out_dir=join(model_path, 'checkpoint'))
-    embedding_callback = EmbeddingCallback(out_dir = join(model_path, 'embedddings'),
-                                           path = input_path,
-                                           rmsd_name = "rmsd",
-                                           projection_type = "3d_project",
-                                           sample_interval = len(valid_dataset) // 1000,
-                                           writer = writer,
-                                           wandb_config = wandb_config)
+
+    if comm_rank == 0:
+        checkpoint_callback = CheckpointCallback(out_dir=join(model_path, 'checkpoint'))
+        embedding_callback = EmbeddingCallback(out_dir = join(model_path, 'embedddings'),
+                                               path = input_path,
+                                               rmsd_name = "rmsd",
+                                               projection_type = "3d_project",
+                                               sample_interval = len(valid_dataset) // 1000,
+                                               writer = writer,
+                                               wandb_config = wandb_config)
 
     # Train model with callbacks
-    vae.train(train_loader, valid_loader, epochs,
-              callbacks=[loss_callback, checkpoint_callback, embedding_callback])
+    if comm_rank == 0:
+        callbacks = [loss_callback, checkpoint_callback, embedding_callback]
+    else:
+        callbacks = [loss_callback]
 
-    # Save loss history to disk.
-    loss_callback.save(join(model_path, 'loss.json'))
+    # train the model
+    vae.train(train_loader, valid_loader, epochs, callbacks = callbacks)
 
-    # Save hparams to disk
-    hparams.save(join(model_path, 'model-hparams.json'))
-    optimizer_hparams.save(join(model_path, 'optimizer-hparams.json'))
+    # Save stuff
+    if comm_rank == 0:
+        # Save loss history to disk.
+        loss_callback.save(join(model_path, 'loss.json'))
 
-    # Save final model weights to disk
-    vae.save_weights(join(model_path, 'encoder-weights.pt'),
-                     join(model_path, 'decoder-weights.pt'))
+        # Save hparams to disk
+        hparams.save(join(model_path, 'model-hparams.json'))
+        optimizer_hparams.save(join(model_path, 'optimizer-hparams.json'))
+
+        # Save final model weights to disk
+        vae.save_weights(join(model_path, 'encoder-weights.pt'),
+                         join(model_path, 'decoder-weights.pt'))
 
     # Output directory structure
     #  out_path
