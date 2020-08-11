@@ -101,6 +101,14 @@ def main(local_rank, input_path, out_path, model_id, dim1, dim2, encoder_gpu,
 
     optimizer_hparams = OptimizerHyperparams(name='RMSprop', hparams={'lr':0.00001})
 
+    # rescale enc and dec
+    if encoder_gpu != decoder_gpu:
+        encoder_gpu = 2 * comm_local_rank + encoder_gpu
+        decoder_gpu = 2 * comm_local_rank + decoder_gpu
+    else:
+        encoder_gpu = comm_local_rank
+        decoder_gpu = comm_local_rank
+    
     # place encoder and decoder
     vae = VAE(input_shape, hparams, optimizer_hparams,
               gpu = (encoder_gpu, decoder_gpu), enable_amp = amp)
@@ -110,9 +118,10 @@ def main(local_rank, input_path, out_path, model_id, dim1, dim2, encoder_gpu,
         vae.model = DDP(vae.model, device_ids = None, output_device = None)
     
     # Diplay model
-    print(vae)
-    # Only print summary when encoder_gpu is None or 0
-    summary(vae.model, input_shape)
+    if comm_size == 1:
+        print(vae)
+        # Only print summary when encoder_gpu is None or 0
+        summary(vae.model, input_shape)
 
     # Load training and validation data
     # training: chunk the dataset
@@ -124,7 +133,7 @@ def main(local_rank, input_path, out_path, model_id, dim1, dim2, encoder_gpu,
                                       sparse=sparse)
     if comm_size > 1:
         chunksize = len(train_dataset) // comm_size
-        train_dataset = subset(train_dataset, range(comm_rank * chunksize, (comm_rank + 1) * chunksize))
+        train_dataset = Subset(train_dataset, range(comm_rank * chunksize, (comm_rank + 1) * chunksize))
     
     train_loader = DataLoader(train_dataset,
                               batch_size = batch_size,

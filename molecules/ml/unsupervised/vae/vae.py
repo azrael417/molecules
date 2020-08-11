@@ -309,8 +309,8 @@ class VAE:
 
         comm_rank = 0
         if dist.is_initialized():
-            comm_rank == dist.get_rank()
-        
+            comm_rank = dist.get_rank()
+            
         self.model.train()
         train_loss = 0.
         for batch_idx, token in enumerate(train_loader):
